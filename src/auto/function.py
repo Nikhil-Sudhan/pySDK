@@ -1,5 +1,8 @@
 from pymavlink import mavutil
 from time import sleep
+import time
+
+from src.auto.verify_fun import *
 
 
 
@@ -40,10 +43,20 @@ def arm_disarm(master_conn, arm_command):
     action = "Arm" if arm_command else "Disarm"
     msg = master_conn.recv_match(type='COMMAND_ACK', blocking=True)
     print(f"{action} command: {msg}")
-    return msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+    
+    # For arm command, wait until armed status is confirmed
+    if arm_command:
+        if wait_until_armed():
+            return msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+        else:
+            print("Failed to confirm armed status")
+            return False
+    # For disarm command, just check command acknowledgment
+    else:
+        return msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
 
 def takeoff(master_conn, altitude):
-    
+    # Send takeoff command
     master_conn.mav.command_long_send(
         master_conn.target_system,
         master_conn.target_component,
@@ -57,9 +70,23 @@ def takeoff(master_conn, altitude):
         0,
         altitude
     )
+    
+    # Wait for command acknowledgment
     msg = master_conn.recv_match(type='COMMAND_ACK', blocking=True)
     print(f"Takeoff to {altitude}m: {msg}")
-    return msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+    
+    # Verify command was accepted
+    if msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+        # Wait until target altitude is reached
+        if wait_until_altitude(master_conn, altitude, tolerance=0.5):
+            print("Successfully reached target altitude")
+            return True
+        else:
+            print("Failed to reach target altitude")
+            return False
+    else:
+        print("Takeoff command was not accepted")
+        return False
 
 def condition_yaw(master_conn, angle_deg, speed_deg_s, direction, relative_offset):
     
@@ -125,7 +152,6 @@ def move_global_int(master_conn, lat_deg_e7, lon_deg_e7, alt_m, yaw_rad=0, yaw_r
         yaw_rad, yaw_rate_rad_s
     ))
     print(f"Sent move_global_int command (lat:{lat_deg_e7}, lon:{lon_deg_e7}, alt:{alt_m}, yaw:{yaw_rad})")
-
 
 
 

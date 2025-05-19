@@ -3,7 +3,7 @@ import json
 import os
 import time
 from pymavlink import mavutil
-# Import all the functions from function.py
+
 from .function import (
     check_heartbeat,
     set_mode,
@@ -15,34 +15,18 @@ from .function import (
     move_global_int
 )
 
-# Read API key from .profile file
 def read_api_key():
-    # List of possible locations for .profile file
-    possible_paths = [
-        '.profile',  # Current directory
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.profile'),  # Project root
-        os.path.join(os.path.expanduser('~'), '.profile'),  # Home directory
-    ]
-    
-    for profile_path in possible_paths:
-        try:
-            if os.path.exists(profile_path):
-                print(f"Found .profile at: {profile_path}")
-                with open(profile_path, 'r') as f:
-                    content = f.read().strip()
-                    if content.startswith('OPENAI_API_KEY='):
-                        return content.split('=')[1].strip()
-        except Exception as e:
-            print(f"Error reading {profile_path}: {e}")
-            continue
-    
-    
+    with open('.profile', 'r') as f:
+        content = f.read().strip()
+        if content.startswith('OPENAI_API_KEY='):
+            return content.split('=')[1].strip()
+        raise ValueError("Invalid .profile format. Expected 'OPENAI_API_KEY=<key>'")
 
-# Get API key
+
 api_key = read_api_key()
 client = openai.OpenAI(api_key=api_key)
 
-# Define available functions
+
 available_functions = [
     {
         "name": "set_mode",
@@ -138,10 +122,9 @@ available_functions = [
 ]
 
 def execute_command(function_name, args, master_conn):
-    """Execute a function with the given arguments"""
-    print(f"Executing: {function_name} with args: {args}")
     
-    # Map function names directly to the imported functions
+    # This function map is necessary to map function names from the API calls to their actual function implementations
+    # Without it, we wouldn't be able to dynamically call the right drone control function based on the command name
     function_map = {
         "set_mode": set_mode,
         "arm_disarm": arm_disarm,
@@ -237,12 +220,17 @@ def get_and_execute_drone_commands():
             print("\nExecuting commands:")
             for i, (function_name, function_args) in enumerate(commands):
                 print(f"\nCommand {i+1}/{len(commands)}:")
-                execute_command(function_name, function_args, master)
+                result = execute_command(function_name, function_args, master)
                 
-                # Sleep for 5 seconds between commands
-                if i < len(commands) - 1:  # Don't sleep after the last command
-                    print(f"Waiting 5 seconds before next command...")
-                    time.sleep(5)
+                # If a command fails or times out, stop execution
+                if result is False or result == "timeout":
+                    print(f"Command {function_name} failed or timed out. Stopping execution.")
+                    return False
+                
+                # Proceed directly to the next command without sleep
+                # Verification functions already ensure command completion
+                if i < len(commands) - 1:  # Don't print after the last command
+                    print(f"Proceeding to next command...")
             
             print("\nAll commands executed!")
             return True
