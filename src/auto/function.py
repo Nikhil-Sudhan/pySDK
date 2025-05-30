@@ -2,14 +2,14 @@ from pymavlink import mavutil
 from time import sleep
 import time
 
-from src.auto.verify_fun import *
+from src.auto.v_function import *
 
 
 
 def check_heartbeat(master_conn):
   
     master_conn.wait_heartbeat()
-    print("Heartbeat received from system (system %u component %u)" % (master_conn.target_system, master_conn.target_component))
+    # print("Heartbeat received from system (system %u component %u)" % (master_conn.target_system, master_conn.target_component))
 
 def set_mode(master_conn, mode_name):
     
@@ -26,9 +26,8 @@ def set_mode(master_conn, mode_name):
         0, 0, 0, 0, 0
     )
     msg = master_conn.recv_match(type='COMMAND_ACK', blocking=True)
-    print(f"Set mode to {mode_name}: {msg}")
-
-    return msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+    #print(msg.result)
+    return msg.result if msg else None
 
 def arm_disarm(master_conn, arm_command):
     
@@ -42,18 +41,18 @@ def arm_disarm(master_conn, arm_command):
     )
     action = "Arm" if arm_command else "Disarm"
     msg = master_conn.recv_match(type='COMMAND_ACK', blocking=True)
-    print(f"{action} command: {msg}")
+    #print(f"{action} command: {msg}")
     
     # For arm command, wait until armed status is confirmed
     if arm_command:
         if wait_until_armed():
-            return msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+            return msg.result if msg else None
         else:
-            print("Failed to confirm armed status")
-            return False
+            #print("Failed to confirm armed status")
+            return None
     # For disarm command, just check command acknowledgment
     else:
-        return msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+        return msg.result if msg else None
 
 def takeoff(master_conn, altitude):
     # Send takeoff command
@@ -73,20 +72,10 @@ def takeoff(master_conn, altitude):
     
     # Wait for command acknowledgment
     msg = master_conn.recv_match(type='COMMAND_ACK', blocking=True)
-    print(f"Takeoff to {altitude}m: {msg}")
+    #print(f"Takeoff to {altitude}m: {msg}")
     
     # Verify command was accepted
-    if msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
-        # Wait until target altitude is reached
-        if wait_until_altitude(master_conn, altitude, tolerance=0.5):
-            print("Successfully reached target altitude")
-            return True
-        else:
-            print("Failed to reach target altitude")
-            return False
-    else:
-        print("Takeoff command was not accepted")
-        return False
+    return msg.result if msg else None
 
 def condition_yaw(master_conn, angle_deg, speed_deg_s, direction, relative_offset):
     
@@ -102,8 +91,8 @@ def condition_yaw(master_conn, angle_deg, speed_deg_s, direction, relative_offse
         0, 0, 0
     )
     msg = master_conn.recv_match(type='COMMAND_ACK', blocking=True)
-    print(f"Condition Yaw (angle: {angle_deg}, speed: {speed_deg_s}, dir: {direction}): {msg}")
-    return msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+    #print(f"Condition Yaw (angle: {angle_deg}, speed: {speed_deg_s}, dir: {direction}): {msg}")
+    return msg.result if msg else None
 
 def change_speed(master_conn, speed_type, speed_m_s, throttle_pct, relative):
     
@@ -119,8 +108,8 @@ def change_speed(master_conn, speed_type, speed_m_s, throttle_pct, relative):
         0, 0, 0
     )
     msg = master_conn.recv_match(type='COMMAND_ACK', blocking=True)
-    print(f"Change speed (type: {speed_type}, speed: {speed_m_s}m/s): {msg}")
-    return msg and msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+    #print(f"Change speed (type: {speed_type}, speed: {speed_m_s}m/s): {msg}")
+    return msg.result if msg else None
 
 def move_local_ned(master_conn, x_m, y_m, z_m_down, yaw_rad=0, yaw_rate_rad_s=0):
     
@@ -135,7 +124,7 @@ def move_local_ned(master_conn, x_m, y_m, z_m_down, yaw_rad=0, yaw_rate_rad_s=0)
         0, 0, 0,
         yaw_rad, yaw_rate_rad_s
     ))
-    print(f"Sent move_local_ned command (x:{x_m}, y:{y_m}, z:{z_m_down}, yaw:{yaw_rad})")
+    #print(f"Sent move_local_ned command (x:{x_m}, y:{y_m}, z:{z_m_down}, yaw:{yaw_rad})")
 
 def move_global_int(master_conn, lat_deg_e7, lon_deg_e7, alt_m, yaw_rad=0, yaw_rate_rad_s=0):
     master_conn.mav.send(mavutil.mavlink.MAVLink_set_position_target_global_int_message(
@@ -151,7 +140,7 @@ def move_global_int(master_conn, lat_deg_e7, lon_deg_e7, alt_m, yaw_rad=0, yaw_r
         0, 0, 0,
         yaw_rad, yaw_rate_rad_s
     ))
-    print(f"Sent move_global_int command (lat:{lat_deg_e7}, lon:{lon_deg_e7}, alt:{alt_m}, yaw:{yaw_rad})")
+    #print(f"Sent move_global_int command (lat:{lat_deg_e7}, lon:{lon_deg_e7}, alt:{alt_m}, yaw:{yaw_rad})")
 
 
 

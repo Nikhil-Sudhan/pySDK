@@ -23,7 +23,9 @@ def manual_mode(address):
         print()
 
 def autonomous_mode():
-    get_and_execute_drone_commands()
+    while True:
+        intput_str=input("Enter the command")
+        get_and_execute_drone_commands(intput_str)
     
     
 

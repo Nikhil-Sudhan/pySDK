@@ -135,10 +135,15 @@ def execute_command(function_name, args, master_conn):
         "move_global_int": move_global_int
     }
     
-    # Get the function from our map
+    # Keep track of executed functions for logging/debugging
+    function_list = [{"name": function_name, "args": args}]
+    
+    #print(function_list)
+    #print(f"Functions to execute: {[f['name'] for f in function_list]}")
+    #print(f"With arguments: {[f['args'] for f in function_list]}")
     func = function_map.get(function_name)
     if func is None:
-        print(f"Error: Function {function_name} not found")
+        #print(f"Error: Function {function_name} not found")
         return False
     
     # Call the function with master_conn and the provided arguments
@@ -165,31 +170,26 @@ def execute_command(function_name, args, master_conn):
         try:
             status, result = result_queue.get(timeout=5)  # 10 second timeout
             if status == "error":
-                print(f"Error executing {function_name}: {result}")
-                return False
+                #print(f"Error executing {function_name}: {result}")
+                return -1  # Return -1 for error
             else:
-                print(f"Result: {result}")
-                return result
+                #print(f"Result: {result}")
+                return result if result is not None else -1  # Return ACK or -1 if None
         except queue.Empty:
-            print(f"Function {function_name} timed out after 10 seconds. Continuing...")
-            return "timeout"  # Return a special value for timeout
+            #print(f"Function {function_name} timed out after 10 seconds. Continuing...")
+            return -1  # Return -1 for timeout
             
     except Exception as e:
-        print(f"Error executing {function_name}: {e}")
+        #print(f"Error executing {function_name}: {e}")
         return False
 
-def get_and_execute_drone_commands():
+def get_and_execute_drone_commands(user_input):
     try:
         # Connect to the drone
         master = mavutil.mavlink_connection('udp:127.0.0.1:14550', source_system=255)
         
-        # Check heartbeat first
         check_heartbeat(master)
         
-        # Get custom message input from user
-        user_input = input("Enter your command: ")
-        
-        # Make a call to OpenAI's GPT model with function calling
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -200,46 +200,56 @@ def get_and_execute_drone_commands():
             tool_choice="auto"
         )
         
-        # Extract and process the response
-        message = response.choices[0].message
         
-        # Check if the model wants to call functions
+        message = response.choices[0].message
         if message.tool_calls:
             commands = []
             for tool_call in message.tool_calls:
                 function_name = tool_call.function.name
                 function_args = json.loads(tool_call.function.arguments)
                 
-                # Format the function call for display
+               
                 args_str = ", ".join([f"{k}={repr(v)}" for k, v in function_args.items()])
+
+              
                 function_call = f"{function_name}(master_conn, {args_str})"
+
+            
                 commands.append((function_name, function_args))
-                print(f"Queued command: {function_call}")
+
+                
+                #print(f"Queued command: {function_call}")
+               
+
+            function_list = []
             
-            # Execute each command with a delay
-            print("\nExecuting commands:")
             for i, (function_name, function_args) in enumerate(commands):
-                print(f"\nCommand {i+1}/{len(commands)}:")
-                result = execute_command(function_name, function_args, master)
-                
-                # If a command fails or times out, stop execution
-                if result is False or result == "timeout":
-                    print(f"Command {function_name} failed or timed out. Stopping execution.")
-                    return False
-                
-                # Proceed directly to the next command without sleep
-                # Verification functions already ensure command completion
-                if i < len(commands) - 1:  # Don't print after the last command
-                    print(f"Proceeding to next command...")
-            
-            print("\nAll commands executed!")
-            return True
+                ack_value = execute_command(function_name, function_args, master)
+                function_list.append([function_name, ack_value])
+                if ack_value is False or ack_value == "timeout":
+                    return False, function_list
+                #print(function_list)
+            return True, function_list
         else:
-            # Return the content if no function was called
-            print(f"No executable commands found. Response: {message.content}")
+            
             return False
             
     except Exception as e:
-        print(f"Error: {str(e)}")
+        #print(f"Error: {str(e)}")
         return False
+
+def message():
+    list_of_messages = [
+    {"value": 0, "name": "MAV_RESULT_ACCEPTED", "description": "Command is valid (is supported and has valid parameters), and was executed."},
+    {"value": 1, "name": "MAV_RESULT_TEMPORARILY_REJECTED", "description": "Command is valid, but cannot be executed at this time. Retry later may work."},
+    {"value": 2, "name": "MAV_RESULT_DENIED", "description": "Command is invalid (supported but has invalid parameters). Retrying won't work."},
+    {"value": 3, "name": "MAV_RESULT_UNSUPPORTED", "description": "Command is not supported (unknown)."},
+    {"value": 4, "name": "MAV_RESULT_FAILED", "description": "Command is valid, but execution failed due to a non-temporary error."},
+    {"value": 5, "name": "MAV_RESULT_IN_PROGRESS", "description": "Command is valid and being executed. Final result will follow."},
+    {"value": 6, "name": "MAV_RESULT_CANCELLED", "description": "Command has been cancelled by a COMMAND_CANCEL message."},
+    {"value": 7, "name": "MAV_RESULT_COMMAND_LONG_ONLY", "description": "Command is only accepted as COMMAND_LONG."},
+    {"value": 8, "name": "MAV_RESULT_COMMAND_INT_ONLY", "description": "Command is only accepted as COMMAND_INT."},
+    {"value": 9, "name": "MAV_RESULT_COMMAND_UNSUPPORTED_MAV_FRAME", "description": "Invalid command due to unsupported MAV_FRAME."}
+]
+
 

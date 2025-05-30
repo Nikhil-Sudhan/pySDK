@@ -1,162 +1,143 @@
-# UAV Aerial System SDK for Gazebo
+# Red Star Autonomy Telemetry Monitor
 
-This SDK provides an interface for controlling UAVs in the Gazebo simulation environment using MAVLink.
-
-## Features
-
-- **Manual Mode**: Navigate the drone through predefined waypoints loaded from a GeoJSON file
-- **Autonomous Mode**: (In development) 
-- **Click-to-Go Mode**: (In development) 
-- **Joystick Control**: (In development)
+A real-time telemetry monitoring system for drones using MAVLink protocol, with a clean curses-based terminal user interface.
 
 ## Prerequisites
 
-- Python 3.6+
-- Gazebo with SITL (Software In The Loop) running
-- MAVLink compatible drone model in Gazebo (ArduPilot or PX4)
+- Python 3.8+
+- PX4 SITL Simulator
+- Gazebo
+- MAVLink (pymavlink)
+- Curses (usually comes with Python)
 
 ## Installation
 
+1. Clone the repository:
 ```bash
-pip install pymavlink
+git clone <your-repo-url>
+cd Red_Star
 ```
 
-## Usage
-
-### Manual Mode
-
-In manual mode, the drone will follow waypoints defined in a GeoJSON file.
-
+2. Install Python dependencies:
 ```bash
-python3 main.py -m path/to/waypoints.geojson
+pip install pymavlink anyio
 ```
 
-The GeoJSON file should contain a FeatureCollection with LineString features. Each point in the LineString represents a waypoint with longitude, latitude, and altitude.
+## Running the Simulation
 
-Example GeoJSON format:
-
-```json
-{
-  "type": "FeatureCollection",
-  "features": [
-    {
-      "type": "Feature",
-      "properties": {},
-      "geometry": {
-        "type": "LineString",
-        "coordinates": [
-          [longitude1, latitude1, altitude1],
-          [longitude2, latitude2, altitude2],
-          ...
-        ]
-      }
-    }
-  ]
-}
-```
-
-### Other Modes
-
+1. First, start PX4 SITL with Gazebo:
 ```bash
-# Autonomous mode (in development)
-python3 main.py -a
-
-# Click-to-go mode (in development)
-python3 main.py -c
-
-# Joystick control (in development)
-python3 main.py -j
+cd PX4-Autopilot
+make px4_sitl gazebo
 ```
 
-## Helper Scripts
-
-The SDK includes two helpful scripts for setting up and troubleshooting Gazebo simulations:
-
-### Setup Script
-
-To quickly set up a Gazebo simulation environment with ArduPilot SITL:
-
+2. In a new terminal, start QGroundControl (optional but recommended):
 ```bash
-./setup_gazebo.sh
+./QGroundControl.AppImage
 ```
 
-This script:
-- Checks for required dependencies
-- Starts ArduPilot SITL with appropriate parameters
-- Launches Gazebo with a compatible drone model
-
-### Arming Troubleshooter
-
-If you're experiencing issues with arming the drone in simulation, use:
-
+3. In another terminal, start the telemetry monitor:
 ```bash
-./fix_arm_issues.py --fix
+# Run the terminal UI (recommended)
+python terminal_ui.py
+
+# Or run the basic telemetry monitor
+python src/telemetary.py
 ```
 
-This script:
-- Diagnoses common arming issues
-- Sets optimal parameters for simulation
-- Tests arming to ensure it works properly
+## Gazebo Commands
 
-## Connection Settings
+### Basic Commands
+- Start Gazebo with PX4 SITL:
+```bash
+make px4_sitl gazebo
+```
 
-The SDK currently connects to a local MAVLink instance at `udp:127.0.0.1:14550`. To use a different connection:
+- Start with a specific world:
+```bash
+make px4_sitl gazebo_iris__<world>
+# Example: make px4_sitl gazebo_iris__empty
+```
 
-1. Modify the `check_connection()` function in `functions.py`
-2. Change the connection string to your desired endpoint
+### Vehicle Control in Gazebo
+- Takeoff command:
+```bash
+commander takeoff
+```
 
-## Simulation-Specific Features
+- Land command:
+```bash
+commander land
+```
 
-### Enhanced Arming Process
+- Arm the vehicle:
+```bash
+commander arm
+```
 
-When running in Gazebo simulation, the SDK includes:
+- Disarm the vehicle:
+```bash
+commander disarm
+```
 
-- Automatic disabling of arming checks that may prevent arming in simulation
-- Multiple arming attempts with proper error handling
-- Proper mode transition verification
-- Monitoring of drone armed state via MAVLink heartbeat messages
+### Common Worlds Available
+- Empty world: `make px4_sitl gazebo_iris__empty`
+- Baylands: `make px4_sitl gazebo_iris__baylands`
+- Warehouse: `make px4_sitl gazebo_iris__warehouse`
+- KSQL Airport: `make px4_sitl gazebo_iris__ksql_airport`
 
-### Improved Mission Handling
+## Telemetry Monitor Features
 
-- Uses MISSION_ITEM_INT messages instead of MISSION_ITEM for improved precision and compatibility
-- Integer-based coordinates (multiplied by 1e7) for accurate waypoint positioning
-- Detailed error reporting for mission upload failures
-- Properly configured waypoint formats for ArduPilot/PX4 compatibility
+The telemetry monitor displays:
+- Flight mode and armed status
+- Latitude and longitude
+- Yaw angle
+- Ground speed
+- Vertical speed
 
-### Troubleshooting Gazebo Simulation
+### Controls
+- `q`: Quit the telemetry monitor
+- Terminal resize is supported
 
-If you encounter issues with the drone in simulation:
+## Project Structure
 
-1. **Connection Problems**: Ensure the SITL instance is running and configured to output MAVLink on UDP port 14550
+```
+Red_Star/
+├── src/
+│   ├── __init__.py
+│   └── telemetary.py    # MAVLink communication
+├── terminal_ui.py       # Terminal user interface
+└── README.md
+```
 
-2. **Arming Issues**: 
-   - Check if GPS is available in the simulation
-   - The SDK automatically disables arming checks (ARMING_CHECK=0)
-   - If still experiencing issues, try setting additional parameters like:
-     - `EK3_ENABLE=0` to disable EKF3
-     - `AHRS_EKF_TYPE=0` to use DCM instead of EKF
+## Troubleshooting
 
-3. **Mission Upload Failures**:
-   - Ensure waypoint coordinates are valid (reasonable latitude/longitude values)
-   - If you see "GCS should send MISSION_ITEM_INT" error, this has been fixed in the current version
-   - Mission upload failures may indicate that your simulation requires specific waypoint types
+1. If no data is showing:
+   - Ensure Gazebo is running with PX4 SITL
+   - Check if MAVLink port (14550) is not blocked
+   - Verify the drone is spawned in Gazebo
+
+2. If connection fails:
+   - Ensure no other programs are using port 14550
+   - Try restarting Gazebo and PX4 SITL
+
+3. Common issues:
+   - "Connection refused": Make sure Gazebo/SITL is running
+   - "No heartbeat": Wait a few seconds, or restart SITL
+   - Black screen: Terminal window too small, resize it
+   - Import error: Make sure you're running from the project root directory
+
+## Development
+
+The project consists of two main components:
+- `telemetary.py`: Handles MAVLink communication
+- `terminal_ui.py`: Provides the terminal UI
 
 ## License
 
-[MIT](LICENSE) 
+[Your License Here]
 
+## Contributing
 
-first you want to run the simulation(gazebo)
-
-cd ardupilot_gazebo
-gz sim -v4 -r iris_runway.sdf
-
-
-then you want to run the ardupilot firmware
-
-cd ardupilot
-./Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON --console --map
-
-
-then you want to run the python script
+[Your Contributing Guidelines Here]
 

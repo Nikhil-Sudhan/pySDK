@@ -67,3 +67,19 @@ master.mav.send(mavutil.mavlink.MAVLink_set_position_target_global_int_message(1
                         master.target_component, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, int(0b110111111000), int(-35.3629849 * 10 ** 7), int(149.1649185 * 10 ** 7), 10, 0, 0, 0, 0, 0, 0, 1.57, 0.5))
 msg = master.recv_match(type='COMMAND_ACK', blocking=True)
 print(msg)
+
+
+
+first you want to run the simulation(gazebo)
+
+cd ardupilot_gazebo
+gz sim -v4 -r iris_runway.sdf
+
+
+then you want to run the ardupilot firmware
+
+cd ardupilot
+./Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON --console --map
+
+
+then you want to run the python script
