@@ -113,18 +113,49 @@ def change_speed(master_conn, speed_type, speed_m_s, throttle_pct, relative):
 
 def move_local_ned(master_conn, x_m, y_m, z_m_down, yaw_rad=0, yaw_rate_rad_s=0):
     
-    master_conn.mav.send(mavutil.mavlink.MAVLink_set_position_target_local_ned_message(
-        0,
-        master_conn.target_system,
-        master_conn.target_component,
-        mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-        int(0b010111111000),
-        x_m, y_m, z_m_down,
-        0, 0, 0,
-        0, 0, 0,
-        yaw_rad, yaw_rate_rad_s
-    ))
-    #print(f"Sent move_local_ned command (x:{x_m}, y:{y_m}, z:{z_m_down}, yaw:{yaw_rad})")
+    # Calculate movement time (assuming 2 m/s movement speed)
+    movement_speed = 2.0  # m/s
+    distance = (x_m**2 + y_m**2 + z_m_down**2)**0.5
+    movement_time = distance / movement_speed if distance > 0 else 0
+    
+    if movement_time > 0:
+        # Calculate velocity components
+        vx = x_m / movement_time
+        vy = y_m / movement_time
+        vz = z_m_down / movement_time
+        
+        # Send velocity command
+        master_conn.mav.send(mavutil.mavlink.MAVLink_set_position_target_local_ned_message(
+            0,
+            master_conn.target_system,
+            master_conn.target_component,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            int(0b110111000111),  # Use velocity, ignore position
+            0, 0, 0,  # Position (ignored)
+            vx, vy, vz,  # Velocity
+            0, 0, 0,  # Acceleration (ignored)
+            yaw_rad, 0
+        ))
+        
+        # Move for calculated time
+        time.sleep(movement_time)
+    
+    # Stop movement by sending zero velocities
+    for _ in range(3):
+        master_conn.mav.send(mavutil.mavlink.MAVLink_set_position_target_local_ned_message(
+            0,
+            master_conn.target_system,
+            master_conn.target_component,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            int(0b110111000111),  # Use velocity
+            0, 0, 0,  # Position (ignored)
+            0, 0, 0,  # Zero velocity = stop and hover
+            0, 0, 0,  # Acceleration (ignored)
+            yaw_rad, 0
+        ))
+        time.sleep(0.1)
+    
+    return True
 
 def move_global_int(master_conn, lat_deg_e7, lon_deg_e7, alt_m, yaw_rad=0, yaw_rate_rad_s=0):
     master_conn.mav.send(mavutil.mavlink.MAVLink_set_position_target_global_int_message(

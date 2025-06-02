@@ -1,5 +1,8 @@
 import curses
 import time
+import threading
+from queue import Queue, Empty
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from src.auto.openai_assistant import get_and_execute_drone_commands
 from src.telemetary import process_telemetry
 
@@ -27,8 +30,21 @@ def main(stdscr):
     input_str = ""
     MAX_LOGS = 500
 
+    # Enhanced command processing with timeout and cancellation
+    command_queue = Queue()
+    result_queue = Queue()
+    processing_command = False
+    current_command = ""
+    command_start_time = 0
+    command_timeout = 30.0  # 30 second timeout
+    
+    # Thread pool for better resource management
+    executor = ThreadPoolExecutor(max_workers=2)
+    current_future = None
+    cancel_requested = False
+
     # Fixed telemetry section height
-    telem_height = 5
+    telem_height = 6  # Increased by 1 for status line
     
     # Calculate window sizes ensuring they're at least 1 line high
     log_height = max(1, max_y - telem_height - 3)  # -3 for header, separator, and input
@@ -41,11 +57,16 @@ def main(stdscr):
     curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Normal values
     curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # Warnings
     curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)    # Errors/Critical
+    curses.init_pair(4, curses.COLOR_BLUE, curses.COLOR_BLACK)    # For processing status
+    curses.init_pair(5, curses.COLOR_CYAN, curses.COLOR_BLACK)  # For progress
 
     # Initialize telemetry_data with defaults
     telemetry_data = {
         'alt': 0, 'lat': 0, 'long': 0, 'mode': 'UNKNOWN', 'gs': 0, 'vs': 0, 'yaw': 0, 'battery': 0
     }
+    
+    # Async telemetry updates
+    telemetry_future = None
     
     # Get initial telemetry data in a non-blocking way
     try:
@@ -54,9 +75,19 @@ def main(stdscr):
         # If telemetry fails, continue with defaults
         pass
 
-    # Separate telemetry update from input loop
+    # Enhanced command processor with timeout
+    def execute_command_with_timeout(command):
+        """Execute command with proper error handling"""
+        try:
+            return get_and_execute_drone_commands(command)
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    # Timing variables
     last_update = 0
-    update_interval = 2.0  # Slow down telemetry updates to avoid UI lag
+    update_interval = 1.0  # Faster telemetry updates
+    last_ui_update = 0
+    ui_update_interval = 0.05  # Even faster UI updates (20 FPS)
 
     while True:
         try:
@@ -76,111 +107,176 @@ def main(stdscr):
 
             current_time = time.time()
             
-            # Update telemetry less frequently to avoid UI lag
+            # Handle command timeout and cancellation
+            if processing_command and current_future:
+                elapsed = current_time - command_start_time
+                
+                # Check if command timed out or was cancelled
+                if elapsed > command_timeout or cancel_requested:
+                    try:
+                        current_future.cancel()
+                        logs.append(f"<console> Command {'cancelled' if cancel_requested else 'timed out'} after {elapsed:.1f}s")
+                    except:
+                        pass
+                    processing_command = False
+                    current_command = ""
+                    current_future = None
+                    cancel_requested = False
+                
+                # Check if command completed
+                elif current_future.done():
+                    try:
+                        response = current_future.result(timeout=0.1)
+                        if response:
+                            logs.append(f"<console> {response}")
+                        else:
+                            logs.append(f"<console> Command executed successfully")
+                    except FutureTimeoutError:
+                        logs.append(f"<console> Command timed out")
+                    except Exception as e:
+                        logs.append(f"Error executing command: {str(e)}")
+                    
+                    processing_command = False
+                    current_command = ""
+                    current_future = None
+                    
+                    if len(logs) > MAX_LOGS:
+                        logs = logs[-MAX_LOGS:]
+
+            # Async telemetry updates
             if current_time - last_update >= update_interval:
-                try:
-                    new_telemetry = process_telemetry()
-                    telemetry_data = new_telemetry  # Only update if successful
+                if telemetry_future is None or telemetry_future.done():
+                    if telemetry_future and telemetry_future.done():
+                        try:
+                            new_telemetry = telemetry_future.result(timeout=0.1)
+                            telemetry_data = new_telemetry
+                        except:
+                            pass  # Keep old telemetry data
+                    
+                    # Start new telemetry request
+                    telemetry_future = executor.submit(process_telemetry)
                     last_update = current_time
-                except Exception as e:
-                    logs.append(f"Telemetry Error: {str(e)}")
 
-            # Draw telemetry
-            try:
-                stdscr.addstr(0, 0, "Red Star Autonomy".center(max_x), curses.A_REVERSE)
-                stdscr.addstr(1, 0, "-" * max_x)
-                alt_str = f"ALT: {format_value(telemetry_data['alt'])}m"
-                pos_str = f"LAT: {format_value(telemetry_data['lat'], 6)}° LONG: {format_value(telemetry_data['long'], 6)}°"
-                mode_str = f"MODE: {telemetry_data['mode']}"
-                speed_str = f"GS: {format_value(telemetry_data['gs'])}m/s VS: {format_value(telemetry_data['vs'])}m/s"
-                yaw_str = f"YAW: {format_value(telemetry_data['yaw'])}°"
-                batt_str = f"BATT: {format_value(telemetry_data['battery'])}%"
-                batt_color = curses.color_pair(1)
-                if telemetry_data['battery'] <= 20:
-                    batt_color = curses.color_pair(3)
-                elif telemetry_data['battery'] <= 50:
-                    batt_color = curses.color_pair(2)
-                stdscr.addstr(2, 2, alt_str[:max_x-2])
-                stdscr.addstr(2, min(max_x // 3, max_x-len(pos_str)), pos_str[:max_x-max_x//3])
-                stdscr.addstr(3, 2, mode_str[:max_x-2])
-                stdscr.addstr(3, min(max_x // 3, max_x-len(speed_str)), speed_str[:max_x-max_x//3])
-                stdscr.addstr(4, 2, yaw_str[:max_x-2])
-                stdscr.addstr(4, min(max_x // 3, max_x-len(batt_str)), batt_str[:max_x-max_x//3], batt_color)
-                stdscr.addstr(5, 0, "-" * max_x)
-            except curses.error:
-                pass
-
-            # Show logs
-            log_win.erase()
-            visible_logs = logs[-(log_height):]  # Only show logs that fit
-            for i, log in enumerate(visible_logs):
+            # Update UI more frequently
+            if current_time - last_ui_update >= ui_update_interval:
+                # Draw telemetry
                 try:
-                    if log.startswith("<user>"):
-                        log_win.addstr(i, 0, log[:max_x], curses.color_pair(2))
-                    elif log.startswith("<console>"):
-                        log_win.addstr(i, 0, log[:max_x], curses.color_pair(1))
+                    stdscr.addstr(0, 0, "Red Star Autonomy".center(max_x), curses.A_REVERSE)
+                    stdscr.addstr(1, 0, "-" * max_x)
+                    alt_str = f"ALT: {format_value(telemetry_data['alt'])}m"
+                    pos_str = f"LAT: {format_value(telemetry_data['lat'], 6)}° LONG: {format_value(telemetry_data['long'], 6)}°"
+                    mode_str = f"MODE: {telemetry_data['mode']}"
+                    speed_str = f"GS: {format_value(telemetry_data['gs'])}m/s VS: {format_value(telemetry_data['vs'])}m/s"
+                    yaw_str = f"YAW: {format_value(telemetry_data['yaw'])}°"
+                    batt_str = f"BATT: {format_value(telemetry_data['battery'])}%"
+                    batt_color = curses.color_pair(1)
+                    if telemetry_data['battery'] <= 20:
+                        batt_color = curses.color_pair(3)
+                    elif telemetry_data['battery'] <= 50:
+                        batt_color = curses.color_pair(2)
+                    stdscr.addstr(2, 2, alt_str[:max_x-2])
+                    stdscr.addstr(2, min(max_x // 3, max_x-len(pos_str)), pos_str[:max_x-max_x//3])
+                    stdscr.addstr(3, 2, mode_str[:max_x-2])
+                    stdscr.addstr(3, min(max_x // 3, max_x-len(speed_str)), speed_str[:max_x-max_x//3])
+                    stdscr.addstr(4, 2, yaw_str[:max_x-2])
+                    stdscr.addstr(4, min(max_x // 3, max_x-len(batt_str)), batt_str[:max_x-max_x//3], batt_color)
+                    
+                    # Enhanced status line with progress and cancel option
+                    if processing_command:
+                        elapsed = current_time - command_start_time
+                        progress = min(100, (elapsed / command_timeout) * 100)
+                        status_str = f"Processing: {current_command} [{progress:.0f}%] [{elapsed:.1f}s] (Ctrl+C to cancel)"
+                        stdscr.addstr(5, 2, status_str[:max_x-4], curses.color_pair(5) | curses.A_BLINK)
                     else:
-                        log_win.addstr(i, 0, log[:max_x], curses.color_pair(3))
+                        stdscr.addstr(5, 2, " " * (max_x-4))
+                    
+                    stdscr.addstr(6, 0, "-" * max_x)
                 except curses.error:
                     pass
-            log_win.refresh()
-            
-            # Input handling - focus on making this work
+
+                # Show logs with better performance
+                log_win.erase()
+                visible_logs = logs[-(log_height):]
+                for i, log in enumerate(visible_logs):
+                    try:
+                        if log.startswith("<user>"):
+                            log_win.addstr(i, 0, log[:max_x], curses.color_pair(2))
+                        elif log.startswith("<console>"):
+                            log_win.addstr(i, 0, log[:max_x], curses.color_pair(1))
+                        else:
+                            log_win.addstr(i, 0, log[:max_x], curses.color_pair(3))
+                    except curses.error:
+                        break  # Stop if we can't draw more
+                log_win.refresh()
+                
+                last_ui_update = current_time
+
+            # Input handling with cancel support
             input_win.erase()
-            cursor_pos = len(input_str) + 2  # +2 for the "> " prompt
+            cursor_pos = len(input_str) + 2
             
             try:
-                input_win.addstr(0, 0, f"> {input_str}")
-                # Position cursor at the end of input
+                if processing_command:
+                    elapsed = current_time - command_start_time
+                    input_win.addstr(0, 0, f"> {input_str} (processing {elapsed:.1f}s...)")
+                else:
+                    input_win.addstr(0, 0, f"> {input_str}")
                 input_win.move(0, min(cursor_pos, max_x-1))
             except curses.error:
                 pass
                 
             input_win.refresh()
 
-            # Get input - don't use stdscr.getch(), use the input window directly
-            input_win.nodelay(True)  # Make getch non-blocking
+            # Get input
+            input_win.nodelay(True)
             ch = input_win.getch()
             
             if ch != -1:
-                if ch == curses.KEY_ENTER or ch == 10 or ch == 13:  # Enter key
-                    if input_str.strip():
+                if ch == 3:  # Ctrl+C
+                    if processing_command:
+                        cancel_requested = True
+                        logs.append("<user> Cancelling command...")
+                    else:
+                        break  # Exit if no command running
+                elif ch == curses.KEY_ENTER or ch == 10 or ch == 13:
+                    if input_str.strip() and not processing_command:
                         logs.append(f"<user> {input_str}")
-                        try:
-                            response = get_and_execute_drone_commands(input_str)
-                            if response:
-                                logs.append(f"<console> {response}")
-                            else:
-                                logs.append(f"<console> Command executed successfully")
-                        except Exception as e:
-                            logs.append(f"Error executing command: {str(e)}")
+                        processing_command = True
+                        current_command = input_str
+                        command_start_time = current_time
+                        current_future = executor.submit(execute_command_with_timeout, input_str)
                         input_str = ""
                         if len(logs) > MAX_LOGS:
                             logs = logs[-MAX_LOGS:]
-                elif ch == curses.KEY_BACKSPACE or ch == 127 or ch == 8:  # Different backspace codes
-                    if input_str:
+                elif ch == curses.KEY_BACKSPACE or ch == 127 or ch == 8:
+                    if input_str and not processing_command:
                         input_str = input_str[:-1]
-                elif ch == curses.KEY_DC:  # Delete key
-                    if input_str:
+                elif ch == curses.KEY_DC:
+                    if input_str and not processing_command:
                         input_str = input_str[:-1]
-                elif 32 <= ch <= 126:  # Printable characters
-                    if len(input_str) < max_x - 3:  # Leave room for prompt and cursor
+                elif 32 <= ch <= 126 and not processing_command:
+                    if len(input_str) < max_x - 3:
                         input_str += chr(ch)
             
-            # Refresh the screen quickly
             stdscr.refresh()
             
-            # No delay here - let the loop run as fast as it can
-            # This keeps input responsive
+            # Minimal delay for high responsiveness
+            time.sleep(0.005)  # 5ms delay for 200 FPS
             
         except KeyboardInterrupt:
-            break
+            if processing_command:
+                cancel_requested = True
+            else:
+                break
         except curses.error as e:
             if "Terminal too small" in str(e):
                 raise e
             logs.append(f"UI Error: {str(e)}")
         except Exception as e:
             logs.append(f"Error: {str(e)}")
+    
+    # Cleanup
+    executor.shutdown(wait=False)
 
 def start_console():
     try:
@@ -208,3 +304,7 @@ def message():
     {"value": 8, "name": "MAV_RESULT_COMMAND_INT_ONLY", "description": "Command is only accepted as COMMAND_INT."},
     {"value": 9, "name": "MAV_RESULT_COMMAND_UNSUPPORTED_MAV_FRAME", "description": "Invalid command due to unsupported MAV_FRAME."}
 ]
+    for i in range(list_of_messages):
+        print(i)
+
+    
