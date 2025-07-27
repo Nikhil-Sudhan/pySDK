@@ -3,6 +3,25 @@ from anyio import sleep
 from pymavlink import mavutil
 import time
 import math
+import json
+import os
+
+def read_telemetry_from_service(data_file="/tmp/redstar_telemetry.json"):
+    """Read telemetry data from the background service"""
+    try:
+        # Check if file exists and is recent (less than 5 seconds old)
+        if os.path.exists(data_file):
+            file_age = time.time() - os.path.getmtime(data_file)
+            if file_age < 5.0:  # File is recent
+                with open(data_file, 'r') as f:
+                    data = json.load(f)
+                    # Ensure we have all required fields
+                    required_fields = ['mode', 'armed', 'lat', 'long', 'yaw', 'gs', 'vs', 'alt', 'battery']
+                    if all(field in data for field in required_fields):
+                        return data
+        return None
+    except Exception:
+        return None
 
 def connect_vehicle():
     master = mavutil.mavlink_connection('udp:127.0.0.1:14550')
@@ -26,7 +45,8 @@ def setup_data_streams(master):
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS, 1)
     request_message_interval(master, mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, 5)
 
-def process_telemetry():
+def process_telemetry_direct():
+    """Direct telemetry collection (fallback method)"""
     try:
         # Connect and setup
         master = connect_vehicle()
@@ -82,7 +102,7 @@ def process_telemetry():
         return telemetry_data
         
     except Exception as e:
-        print(f"Error in telemetry processing: {e}")
+        print(f"Error in direct telemetry processing: {e}")
         return {
             'mode': "ERROR",
             'armed': False,
@@ -95,4 +115,17 @@ def process_telemetry():
             'battery': 0
         }
 
-process_telemetry()
+def process_telemetry():
+    """Main telemetry function - tries service first, falls back to direct"""
+    # First try to read from the background service
+    service_data = read_telemetry_from_service()
+    if service_data:
+        return service_data
+    
+    # If service data not available, fall back to direct connection
+    return process_telemetry_direct()
+
+# For backward compatibility, keep the old call
+if __name__ == "__main__":
+    result = process_telemetry()
+    print(f"Telemetry data: {result}")

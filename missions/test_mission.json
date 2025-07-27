@@ -1,0 +1,15 @@
+{
+    "waypoints_name": "test_mission",
+    "waypoints": [
+        {
+            "lat": 37.7749,
+            "lon": -122.4194,
+            "alt": 100.0
+        },
+        {
+            "lat": 37.7849,
+            "lon": -122.4094,
+            "alt": 150.0
+        }
+    ]
+}

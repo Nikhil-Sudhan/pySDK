@@ -4,7 +4,7 @@ import threading
 from queue import Queue, Empty
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from src.auto.openai_assistant import get_and_execute_drone_commands
-from src.telemetary import process_telemetry
+from src.continuous_telemetry import start_continuous_telemetry, stop_continuous_telemetry, get_live_telemetry, execute_priority_command_async
 
 def format_value(value, precision=2):
     """Format numeric values with specified precision"""
@@ -30,18 +30,13 @@ def main(stdscr):
     input_str = ""
     MAX_LOGS = 500
 
-    # Enhanced command processing with timeout and cancellation
-    command_queue = Queue()
-    result_queue = Queue()
+    # Start continuous telemetry system
+    start_continuous_telemetry()
+
+    # Simplified command processing 
     processing_command = False
     current_command = ""
     command_start_time = 0
-    command_timeout = 30.0  # 30 second timeout
-    
-    # Thread pool for better resource management
-    executor = ThreadPoolExecutor(max_workers=2)
-    current_future = None
-    cancel_requested = False
 
     # Fixed telemetry section height
     telem_height = 6  # Increased by 1 for status line
@@ -65,29 +60,23 @@ def main(stdscr):
         'alt': 0, 'lat': 0, 'long': 0, 'mode': 'UNKNOWN', 'gs': 0, 'vs': 0, 'yaw': 0, 'battery': 0
     }
     
-    # Async telemetry updates
-    telemetry_future = None
-    
-    # Get initial telemetry data in a non-blocking way
-    try:
-        telemetry_data = process_telemetry()
-    except:
-        # If telemetry fails, continue with defaults
-        pass
-
-    # Enhanced command processor with timeout
-    def execute_command_with_timeout(command):
-        """Execute command with proper error handling"""
-        try:
-            return get_and_execute_drone_commands(command)
-        except Exception as e:
-            return f"Error: {str(e)}"
-
     # Timing variables
-    last_update = 0
-    update_interval = 1.0  # Faster telemetry updates
     last_ui_update = 0
     ui_update_interval = 0.05  # Even faster UI updates (20 FPS)
+
+    def command_result_callback(result):
+        """Callback for when command completes"""
+        nonlocal processing_command, current_command
+        processing_command = False
+        current_command = ""
+        
+        if result:
+            logs.append(f"<console> {result}")
+        else:
+            logs.append(f"<console> Command executed successfully")
+        
+        if len(logs) > MAX_LOGS:
+            logs[:] = logs[-MAX_LOGS:]
 
     while True:
         try:
@@ -107,55 +96,8 @@ def main(stdscr):
 
             current_time = time.time()
             
-            # Handle command timeout and cancellation
-            if processing_command and current_future:
-                elapsed = current_time - command_start_time
-                
-                # Check if command timed out or was cancelled
-                if elapsed > command_timeout or cancel_requested:
-                    try:
-                        current_future.cancel()
-                        logs.append(f"<console> Command {'cancelled' if cancel_requested else 'timed out'} after {elapsed:.1f}s")
-                    except:
-                        pass
-                    processing_command = False
-                    current_command = ""
-                    current_future = None
-                    cancel_requested = False
-                
-                # Check if command completed
-                elif current_future.done():
-                    try:
-                        response = current_future.result(timeout=0.1)
-                        if response:
-                            logs.append(f"<console> {response}")
-                        else:
-                            logs.append(f"<console> Command executed successfully")
-                    except FutureTimeoutError:
-                        logs.append(f"<console> Command timed out")
-                    except Exception as e:
-                        logs.append(f"Error executing command: {str(e)}")
-                    
-                    processing_command = False
-                    current_command = ""
-                    current_future = None
-                    
-                    if len(logs) > MAX_LOGS:
-                        logs = logs[-MAX_LOGS:]
-
-            # Async telemetry updates
-            if current_time - last_update >= update_interval:
-                if telemetry_future is None or telemetry_future.done():
-                    if telemetry_future and telemetry_future.done():
-                        try:
-                            new_telemetry = telemetry_future.result(timeout=0.1)
-                            telemetry_data = new_telemetry
-                        except:
-                            pass  # Keep old telemetry data
-                    
-                    # Start new telemetry request
-                    telemetry_future = executor.submit(process_telemetry)
-                    last_update = current_time
+            # Get live telemetry data (always fresh from continuous system)
+            telemetry_data = get_live_telemetry()
 
             # Update UI more frequently
             if current_time - last_ui_update >= ui_update_interval:
@@ -181,11 +123,10 @@ def main(stdscr):
                     stdscr.addstr(4, 2, yaw_str[:max_x-2])
                     stdscr.addstr(4, min(max_x // 3, max_x-len(batt_str)), batt_str[:max_x-max_x//3], batt_color)
                     
-                    # Enhanced status line with progress and cancel option
+                    # Enhanced status line with progress
                     if processing_command:
                         elapsed = current_time - command_start_time
-                        progress = min(100, (elapsed / command_timeout) * 100)
-                        status_str = f"Processing: {current_command} [{progress:.0f}%] [{elapsed:.1f}s] (Ctrl+C to cancel)"
+                        status_str = f"Processing: {current_command} [{elapsed:.1f}s] (Ctrl+C to cancel)"
                         stdscr.addstr(5, 2, status_str[:max_x-4], curses.color_pair(5) | curses.A_BLINK)
                     else:
                         stdscr.addstr(5, 2, " " * (max_x-4))
@@ -211,7 +152,7 @@ def main(stdscr):
                 
                 last_ui_update = current_time
 
-            # Input handling with cancel support
+            # Input handling
             input_win.erase()
             cursor_pos = len(input_str) + 2
             
@@ -234,8 +175,9 @@ def main(stdscr):
             if ch != -1:
                 if ch == 3:  # Ctrl+C
                     if processing_command:
-                        cancel_requested = True
-                        logs.append("<user> Cancelling command...")
+                        logs.append("<user> Command cancelled")
+                        processing_command = False
+                        current_command = ""
                     else:
                         break  # Exit if no command running
                 elif ch == curses.KEY_ENTER or ch == 10 or ch == 13:
@@ -244,10 +186,13 @@ def main(stdscr):
                         processing_command = True
                         current_command = input_str
                         command_start_time = current_time
-                        current_future = executor.submit(execute_command_with_timeout, input_str)
+                        
+                        # Execute command with priority using the queue system
+                        execute_priority_command_async(input_str, command_result_callback)
+                        
                         input_str = ""
                         if len(logs) > MAX_LOGS:
-                            logs = logs[-MAX_LOGS:]
+                            logs[:] = logs[-MAX_LOGS:]
                 elif ch == curses.KEY_BACKSPACE or ch == 127 or ch == 8:
                     if input_str and not processing_command:
                         input_str = input_str[:-1]
@@ -265,7 +210,9 @@ def main(stdscr):
             
         except KeyboardInterrupt:
             if processing_command:
-                cancel_requested = True
+                logs.append("<user> Command cancelled")
+                processing_command = False
+                current_command = ""
             else:
                 break
         except curses.error as e:
@@ -276,7 +223,7 @@ def main(stdscr):
             logs.append(f"Error: {str(e)}")
     
     # Cleanup
-    executor.shutdown(wait=False)
+    stop_continuous_telemetry()
 
 def start_console():
     try:
@@ -289,7 +236,6 @@ def start_console():
 
 if __name__ == "__main__":
     start_console()
-
 
 def message():
     list_of_messages = [
