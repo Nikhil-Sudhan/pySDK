@@ -6,6 +6,9 @@ import uvicorn
 import json
 import os
 
+# Import the OpenAI assistant
+from src.auto.openai_assistant import get_and_execute_drone_commands
+
 app = FastAPI(title="UAV Command API")
 
 # Add CORS middleware
@@ -35,9 +38,33 @@ async def root():
 
 @app.post("/execute-command")
 async def execute_command(request: CommandRequest):
-    """Print the received command"""
+    """Process command through OpenAI and execute on drone in Gazebo"""
     print(f"Received command: {request.command}")
-    return {"message": f"Command received: {request.command}"}
+    
+    try:
+        # Send command to OpenAI assistant for processing and execution
+        success, function_list = get_and_execute_drone_commands(request.command)
+        
+        if success:
+            return {
+                "message": f"Command executed successfully: {request.command}",
+                "status": "success",
+                "executed_functions": function_list
+            }
+        else:
+            return {
+                "message": f"Command failed: {request.command}",
+                "status": "failed",
+                "executed_functions": function_list if 'function_list' in locals() else []
+            }
+            
+    except Exception as e:
+        print(f"Error processing command: {str(e)}")
+        return {
+            "message": f"Error processing command: {request.command}",
+            "status": "error",
+            "error": str(e)
+        }
 
 @app.get("/health")
 async def health_check():
@@ -56,4 +83,4 @@ def save_mission(mission: Mission):
     return {"status": "saved", "mission": mission.waypoints_name}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8001) 

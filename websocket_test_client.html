@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Position Delta WebSocket Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .connected { background-color: #d4edda; color: #155724; }
+        .disconnected { background-color: #f8d7da; color: #721c24; }
+        .data-display {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+        }
+        .delta-values {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .delta-item {
+            background-color: #e9ecef;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .delta-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #495057;
+        }
+        .delta-label {
+            font-size: 14px;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { 
+            background-color: #6c757d; 
+            cursor: not-allowed; 
+        }
+        .log {
+            height: 300px;
+            overflow-y: auto;
+            background-color: #000;
+            color: #00ff00;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚁 Drone Position Delta WebSocket Test Client</h1>
+        
+        <div id="connection-status" class="status disconnected">
+            Disconnected from WebSocket
+        </div>
+        
+        <div>
+            <button id="connect-btn" onclick="connectWebSocket()">Connect</button>
+            <button id="disconnect-btn" onclick="disconnectWebSocket()" disabled>Disconnect</button>
+            <button onclick="sendTestMessage()">Send Test Message</button>
+            <button onclick="clearLog()">Clear Log</button>
+        </div>
+        
+        <h2>Current Position Deltas</h2>
+        <div class="delta-values">
+            <div class="delta-item">
+                <div class="delta-value" id="lat-delta">0.0000000</div>
+                <div class="delta-label">Latitude Δ</div>
+            </div>
+            <div class="delta-item">
+                <div class="delta-value" id="lon-delta">0.0000000</div>
+                <div class="delta-label">Longitude Δ</div>
+            </div>
+            <div class="delta-item">
+                <div class="delta-value" id="alt-delta">0.000</div>
+                <div class="delta-label">Altitude Δ (m)</div>
+            </div>
+        </div>
+        
+        <h2>Drone Status</h2>
+        <div class="data-display" id="drone-status">
+            Waiting for data...
+        </div>
+        
+        <h2>Latest Message</h2>
+        <div class="data-display" id="latest-message">
+            No messages received yet
+        </div>
+        
+        <h2>Connection Log</h2>
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let messageCount = 0;
+        
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}\n`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function updateConnectionStatus(connected) {
+            const statusDiv = document.getElementById('connection-status');
+            const connectBtn = document.getElementById('connect-btn');
+            const disconnectBtn = document.getElementById('disconnect-btn');
+            
+            if (connected) {
+                statusDiv.className = 'status connected';
+                statusDiv.textContent = 'Connected to WebSocket Server';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+            } else {
+                statusDiv.className = 'status disconnected';
+                statusDiv.textContent = 'Disconnected from WebSocket';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+            }
+        }
+        
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                log('Already connected to WebSocket');
+                return;
+            }
+            
+            const wsUrl = 'ws://localhost:8000/ws';
+            log(`Connecting to ${wsUrl}...`);
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = function(event) {
+                log('Connected to WebSocket server');
+                updateConnectionStatus(true);
+            };
+            
+            ws.onmessage = function(event) {
+                messageCount++;
+                try {
+                    const data = JSON.parse(event.data);
+                    log(`Message ${messageCount}: ${event.data}`);
+                    
+                    // Update delta displays
+                    if (data.lat !== undefined) {
+                        document.getElementById('lat-delta').textContent = data.lat.toFixed(8);
+                    }
+                    if (data.lon !== undefined) {
+                        document.getElementById('lon-delta').textContent = data.lon.toFixed(8);
+                    }
+                    if (data.alt !== undefined) {
+                        document.getElementById('alt-delta').textContent = data.alt.toFixed(3);
+                    }
+                    
+                    // Update drone status
+                    if (data.drone_status) {
+                        const statusDiv = document.getElementById('drone-status');
+                        statusDiv.innerHTML = `
+                            <strong>Mode:</strong> ${data.drone_status.mode}<br>
+                            <strong>Armed:</strong> ${data.drone_status.armed}<br>
+                            <strong>Current Position:</strong><br>
+                            &nbsp;&nbsp;Lat: ${data.drone_status.current_position?.lat || 'N/A'}<br>
+                            &nbsp;&nbsp;Lon: ${data.drone_status.current_position?.lon || 'N/A'}<br>
+                            &nbsp;&nbsp;Alt: ${data.drone_status.current_position?.alt || 'N/A'} m
+                        `;
+                    }
+                    
+                    // Update latest message display
+                    document.getElementById('latest-message').textContent = JSON.stringify(data, null, 2);
+                    
+                } catch (e) {
+                    log(`Error parsing message: ${e.message}`);
+                }
+            };
+            
+            ws.onclose = function(event) {
+                log(`WebSocket connection closed (Code: ${event.code})`);
+                updateConnectionStatus(false);
+                ws = null;
+            };
+            
+            ws.onerror = function(event) {
+                log('WebSocket error occurred');
+                updateConnectionStatus(false);
+            };
+        }
+        
+        function disconnectWebSocket() {
+            if (ws) {
+                log('Disconnecting from WebSocket...');
+                ws.close();
+            }
+        }
+        
+        function sendTestMessage() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const testMessage = `Test message from client at ${new Date().toISOString()}`;
+                ws.send(testMessage);
+                log(`Sent: ${testMessage}`);
+            } else {
+                log('Cannot send message - not connected');
+            }
+        }
+        
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+            messageCount = 0;
+        }
+        
+        // Auto-connect on page load
+        window.addEventListener('load', function() {
+            log('Page loaded - ready to connect');
+        });
+    </script>
+</body>
+</html> 
