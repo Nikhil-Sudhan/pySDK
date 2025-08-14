@@ -12,8 +12,11 @@ from .function import (
     condition_yaw,
     change_speed,
     move_local_ned,
-    move_global_int
+    move_global_int,
+    generate_waypoint_json,
+    generate_dynamic_waypoints_from_command
 )
+from .cpp_function import generate_cross_coverage_path
 
 def read_api_key():
     with open('.profile', 'r') as f:
@@ -118,10 +121,129 @@ available_functions = [
             },
             "required": ["speed_type", "speed_m_s", "throttle_pct", "relative"]
         }
+    },
+    {
+        "name": "generate_cross_coverage_path",
+        "description": "Generate cross coverage path from waypoints data with specified parameters",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "waypoints_data": {
+                    "type": "array",
+                    "description": "List of waypoint dictionaries containing coordinates and metadata",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "type": {"type": "string"},
+                            "coordinates": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "lat": {"type": "number"},
+                                        "lon": {"type": "number"},
+                                        "alt": {"type": "number"}
+                                    }
+                                }
+                            },
+                            "description": {"type": "string"},
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "properties": {
+                                    "pointCount": {"type": "number"},
+                                    "area": {"type": "number"},
+                                    "perimeter": {"type": "number"}
+                                }
+                            }
+                        }
+                    }
+                },
+                "altitude": {"type": "number", "description": "Flight altitude in meters (default: 50)"},
+                "line_spacing_in_meter": {"type": "number", "description": "Distance between parallel lines in meters (default: 20)"},
+                "smooth_path_edges": {"type": "boolean", "description": "Whether to smooth path edges (default: True)"},
+                "smooth_path_edge_intensity": {"type": "number", "description": "Smoothing intensity 0-100 (default: 50)"}
+            },
+            "required": ["waypoints_data"]
+        }
+    },
+    {
+        "name": "generate_waypoint_json",
+        "description": "Generate waypoint JSON file in the format required by the frontend for 3D drone movement in Cesium",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "waypoints_data": {
+                    "type": "array",
+                    "description": "List of waypoint dictionaries containing coordinates and metadata",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "type": {"type": "string"},
+                            "coordinates": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "lat": {"type": "number"},
+                                        "lon": {"type": "number"},
+                                        "alt": {"type": "number"}
+                                    }
+                                }
+                            },
+                            "description": {"type": "string"},
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "properties": {
+                                    "pointCount": {"type": "number"},
+                                    "area": {"type": "number"},
+                                    "perimeter": {"type": "number"}
+                                }
+                            }
+                        }
+                    }
+                },
+                "mission_name": {"type": "string", "description": "Name of the mission (default: 'Sky Loom Remote Mission')"},
+                "location": {"type": "string", "description": "Location of the mission (default: 'Remote Location')"},
+                "drone_name": {"type": "string", "description": "Name of the drone (default: 'Hovermax')"}
+            },
+            "required": ["waypoints_data"]
+        }
+    },
+    {
+        "name": "generate_dynamic_waypoints_from_command",
+        "description": "Generate a waypoint JSON that mirrors the user's movement command so the Cesium 3D drone can move in sync.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The original natural language command issued by the user"},
+                "current_position": {
+                    "type": "object",
+                    "description": "Optional current drone position if available",
+                    "properties": {
+                        "lon": {"type": "number"},
+                        "lat": {"type": "number"},
+                        "alt": {"type": "number"}
+                    }
+                }
+            },
+            "required": ["command"]
+        }
     }
 ]
 
-def execute_command(function_name, args, master_conn):
+def execute_command(function_name, args, master_conn=None):
     
     # This function map is necessary to map function names from the API calls to their actual function implementations
     # Without it, we wouldn't be able to dynamically call the right drone control function based on the command name
@@ -132,7 +254,10 @@ def execute_command(function_name, args, master_conn):
         "condition_yaw": condition_yaw,
         "change_speed": change_speed,
         "move_local_ned": move_local_ned,
-        "move_global_int": move_global_int
+        "move_global_int": move_global_int,
+        "generate_cross_coverage_path": generate_cross_coverage_path,
+        "generate_waypoint_json": generate_waypoint_json,
+        "generate_dynamic_waypoints_from_command": generate_dynamic_waypoints_from_command
     }
     
     # Keep track of executed functions for logging/debugging
@@ -156,7 +281,14 @@ def execute_command(function_name, args, master_conn):
         
         def run_with_timeout():
             try:
-                result = func(master_conn, **args)
+                # Special handling for non-MAVLink helper functions which should not receive master_conn
+                if function_name in ["generate_cross_coverage_path", "generate_waypoint_json", "generate_dynamic_waypoints_from_command"]:
+                    result = func(**args)  # Don't pass master_conn
+                elif master_conn is not None:
+                    result = func(master_conn, **args)
+                else:
+                    # For other functions when master_conn is None, just return success
+                    result = True
                 result_queue.put(("success", result))
             except Exception as e:
                 result_queue.put(("error", str(e)))
@@ -183,60 +315,115 @@ def execute_command(function_name, args, master_conn):
         #print(f"Error executing {function_name}: {e}")
         return False
 
-def get_and_execute_drone_commands(user_input):
+def get_and_execute_drone_commands(user_input, waypoints_data=None):
     try:
-        # Connect to the drone
-        master = mavutil.mavlink_connection('udp:127.0.0.1:14550', source_system=255)
+        # Check if this is a cross coverage command
+        is_cross_coverage = ("cross coverage" in user_input.lower() or 
+                           "cross cover" in user_input.lower() or 
+                           "cpp" in user_input.lower())
         
-        check_heartbeat(master)
+        # Check if this is a surveillance command (should connect to drone)
+        is_surveillance = user_input.startswith("[SURVEILLANCE]")
         
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You control a drone with functions. Convert natural language to drone control function calls."},
-                {"role": "user", "content": user_input}
-            ],
-            tools=[{"type": "function", "function": func} for func in available_functions],
-            tool_choice="auto"
-        )
+        # Only connect to drone if not a cross coverage command
+        master = None
+        if not is_cross_coverage:
+            try:
+                master = mavutil.mavlink_connection('udp:127.0.0.1:14550', source_system=255)
+                # Use bounded wait to avoid stalling subsequent requests
+                check_heartbeat(master, timeout_s=5.0)
+            except Exception as e:
+                print(f"Warning: Could not connect to drone: {e}")
+                print("Continuing without drone connection for testing...")
+                master = None
+        
+        # Call OpenAI with a bounded timeout using a worker thread
+        import threading
+        import queue
+
+        def _call_openai(q: "queue.Queue"):
+            try:
+                resp = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You control a drone with functions. Convert natural language to drone control function calls. When you see commands about 'cross coverage', 'cross cover path', 'cpp path', or similar, you MUST call the generate_cross_coverage_path function with the appropriate parameters extracted from the command. After any movement-related command (e.g., takeoff, move_local_ned, move_global_int, condition_yaw, change_speed), you MUST also call generate_dynamic_waypoints_from_command with the original command so the frontend receives a full waypoint JSON for Cesium. If the user explicitly asks for a waypoint JSON from existing waypoints, you MAY call generate_waypoint_json. For commands starting with '[SURVEILLANCE]', extract the actual command after the bracket and process it normally (e.g., '[SURVEILLANCE] take off' -> 'take off')."},
+                        {"role": "user", "content": user_input}
+                    ],
+                    tools=[{"type": "function", "function": func} for func in available_functions],
+                    tool_choice="auto"
+                )
+                q.put(("success", resp))
+            except Exception as e:
+                q.put(("error", e))
+
+        _q: "queue.Queue" = queue.Queue()
+        _t = threading.Thread(target=_call_openai, args=(_q,))
+        _t.daemon = True
+        _t.start()
+
+        try:
+            status, payload = _q.get(timeout=10)
+            if status == "error":
+                print(f"OpenAI request error: {payload}")
+                return False, [], None
+            response = payload
+        except queue.Empty:
+            print("OpenAI request timed out")
+            return False, [], None
         
         
         message = response.choices[0].message
+        print(f"OpenAI response: {message.content}")
+        print(f"Tool calls: {message.tool_calls}")
         if message.tool_calls:
             commands = []
             for tool_call in message.tool_calls:
                 function_name = tool_call.function.name
                 function_args = json.loads(tool_call.function.arguments)
                 
-               
+                # If this is the generate_cross_coverage_path function and waypoints_data is provided,
+                # replace the waypoints_data parameter with the actual waypoints
+                if function_name == "generate_cross_coverage_path" and waypoints_data is not None:
+                    function_args["waypoints_data"] = waypoints_data
+                
                 args_str = ", ".join([f"{k}={repr(v)}" for k, v in function_args.items()])
 
-              
                 function_call = f"{function_name}(master_conn, {args_str})"
 
-            
                 commands.append((function_name, function_args))
 
-                
                 #print(f"Queued command: {function_call}")
-               
+
+            # AUTOMATICALLY ADD DYNAMIC WAYPOINT GENERATION for any movement command
+            movement_functions = ["takeoff", "move_local_ned", "move_global_int", "condition_yaw", "change_speed"]
+            has_movement = any(cmd[0] in movement_functions for cmd in commands)
+            
+            if has_movement:
+                print("Movement command detected - automatically adding dynamic waypoint generation")
+                commands.append(("generate_dynamic_waypoints_from_command", {"command": user_input}))
 
             function_list = []
             
+            waypoint_data = None
             for i, (function_name, function_args) in enumerate(commands):
                 ack_value = execute_command(function_name, function_args, master)
                 function_list.append([function_name, ack_value])
+                
+                # If this is a waypoint generation function, store the result
+                if function_name in ["generate_waypoint_json", "generate_dynamic_waypoints_from_command"] and ack_value is not None:
+                    waypoint_data = ack_value
+                
                 if ack_value is False or ack_value == "timeout":
-                    return False, function_list
+                    return False, function_list, waypoint_data
                 #print(function_list)
-            return True, function_list
+            return True, function_list, waypoint_data
         else:
             
-            return False
+            return False, [], None
             
     except Exception as e:
         #print(f"Error: {str(e)}")
-        return False
+        return False, [], None
 
 
 

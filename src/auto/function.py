@@ -6,9 +6,14 @@ from src.auto.v_function import *
 
 
 
-def check_heartbeat(master_conn):
-  
-    master_conn.wait_heartbeat()
+def check_heartbeat(master_conn, timeout_s: float = 5.0):
+    """Wait for a MAVLink heartbeat with a timeout to avoid indefinite blocking.
+
+    Raises TimeoutError if no heartbeat is received within the timeout.
+    """
+    msg = master_conn.wait_heartbeat(timeout=timeout_s)
+    if not msg:
+        raise TimeoutError("No MAVLink heartbeat received within timeout")
     # print("Heartbeat received from system (system %u component %u)" % (master_conn.target_system, master_conn.target_component))
 
 def set_mode(master_conn, mode_name):
@@ -172,6 +177,168 @@ def move_global_int(master_conn, lat_deg_e7, lon_deg_e7, alt_m, yaw_rad=0, yaw_r
         yaw_rad, yaw_rate_rad_s
     ))
     #print(f"Sent move_global_int command (lat:{lat_deg_e7}, lon:{lon_deg_e7}, alt:{alt_m}, yaw:{yaw_rad})")
+
+
+
+
+
+
+def generate_dynamic_waypoints_from_command(command, current_position=None):
+    """
+    Generate dynamic waypoints based on the actual drone command
+    
+    Args:
+        command: The drone command that was executed
+        current_position: Current drone position (optional)
+    
+    Returns:
+        dict: Waypoint JSON with dynamic waypoints based on command
+    """
+    import json
+    import re
+    from datetime import datetime
+    
+    # Default home base coordinates
+    home_lon = 77.7243
+    home_lat = 9.6212
+    home_alt = 0
+    
+    # Parse command for movement parameters
+    command_lower = command.lower()
+    waypoints = []
+    
+    # Start with home position
+    current_lon = home_lon
+    current_lat = home_lat
+    current_alt = home_alt
+    
+    # Parse takeoff command
+    if "take off" in command_lower or "takeoff" in command_lower:
+        # Extract altitude from command
+        alt_match = re.search(r'(\d+)\s*(?:meter|m)', command_lower)
+        takeoff_alt = int(alt_match.group(1)) if alt_match else 150
+        
+        waypoints.append({
+            "id": "waypoint_1",
+            "name": "Takeoff Point",
+            "longitude": current_lon,
+            "latitude": current_lat,
+            "altitude": takeoff_alt,
+            "description": f"Takeoff to {takeoff_alt}m altitude"
+        })
+        current_alt = takeoff_alt
+    
+    # Parse movement commands
+    if "move" in command_lower:
+        # Parse distance and direction
+        distance_match = re.search(r'(\d+)\s*(?:meter|m)', command_lower)
+        distance = int(distance_match.group(1)) if distance_match else 20
+        
+        # Convert meters to coordinate offset (approximate)
+        # 1 meter ≈ 0.00001 degrees (rough approximation)
+        coord_offset = distance * 0.00001
+        
+        if "left" in command_lower:
+            current_lon -= coord_offset
+            direction = "left"
+        elif "right" in command_lower:
+            current_lon += coord_offset
+            direction = "right"
+        elif "forward" in command_lower or "ahead" in command_lower:
+            current_lat += coord_offset
+            direction = "forward"
+        elif "backward" in command_lower or "back" in command_lower:
+            current_lat -= coord_offset
+            direction = "backward"
+        elif "up" in command_lower:
+            current_alt += distance
+            direction = "up"
+        elif "down" in command_lower:
+            current_alt -= distance
+            direction = "down"
+        else:
+            # Default to forward movement
+            current_lat += coord_offset
+            direction = "forward"
+        
+        waypoints.append({
+            "id": f"waypoint_{len(waypoints) + 1}",
+            "name": f"Move {direction.title()}",
+            "longitude": current_lon,
+            "latitude": current_lat,
+            "altitude": current_alt,
+            "description": f"Move {distance}m {direction}"
+        })
+    
+    # Parse yaw/rotation commands
+    if "yaw" in command_lower or "rotate" in command_lower or "turn" in command_lower:
+        angle_match = re.search(r'(\d+)\s*(?:degree|deg)', command_lower)
+        angle = int(angle_match.group(1)) if angle_match else 90
+        
+        waypoints.append({
+            "id": f"waypoint_{len(waypoints) + 1}",
+            "name": f"Yaw {angle}°",
+            "longitude": current_lon,
+            "latitude": current_lat,
+            "altitude": current_alt,
+            "description": f"Rotate {angle} degrees"
+        })
+    
+    # Parse speed changes
+    if "speed" in command_lower:
+        speed_match = re.search(r'(\d+)\s*(?:m/s|mps)', command_lower)
+        speed = int(speed_match.group(1)) if speed_match else 10
+        
+        waypoints.append({
+            "id": f"waypoint_{len(waypoints) + 1}",
+            "name": f"Speed Change",
+            "longitude": current_lon,
+            "latitude": current_lat,
+            "altitude": current_alt,
+            "description": f"Change speed to {speed} m/s"
+        })
+    
+    # If no waypoints were generated, create a basic one
+    if not waypoints:
+        waypoints.append({
+            "id": "waypoint_1",
+            "name": "Command Execution",
+            "longitude": current_lon,
+            "latitude": current_lat,
+            "altitude": current_alt,
+            "description": f"Execute command: {command}"
+        })
+    
+    # Create the waypoint JSON response
+    waypoint_json = {
+        "mission": {
+            "name": f"Dynamic Mission - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "location": "Dynamic Location",
+            "droneName": "Hovermax",
+            "homeBase": {
+                "longitude": home_lon,
+                "latitude": home_lat,
+                "altitude": home_alt,
+                "name": "HOME BASE",
+                "description": "Starting position"
+            },
+            "drone": {
+                "longitude": current_lon,
+                "latitude": current_lat,
+                "altitude": current_alt,
+                "name": "Dynamic Drone",
+                "description": f"Current position after: {command}"
+            },
+            "waypoints": waypoints,
+            "flightPath": {
+                "width": 4,
+                "color": "YELLOW",
+                "glowPower": 0.4
+            }
+        }
+    }
+    
+    return waypoint_json
 
 
 

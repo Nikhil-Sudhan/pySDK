@@ -4,7 +4,7 @@ import threading
 from queue import Queue, Empty
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from src.auto.openai_assistant import get_and_execute_drone_commands
-from src.continuous_telemetry import start_continuous_telemetry, stop_continuous_telemetry, get_live_telemetry, execute_priority_command_async
+from src.telemetary import start_continuous_telemetry, stop_continuous_telemetry, get_live_telemetry, execute_priority_command_async
 
 def format_value(value, precision=2):
     """Format numeric values with specified precision"""

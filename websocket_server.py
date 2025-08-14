@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # Import existing telemetry system
-from src.continuous_telemetry import get_live_telemetry
+from src.telemetary import get_live_telemetry
 
 app = FastAPI(title="Drone Position Delta WebSocket Server")
 
@@ -209,7 +209,7 @@ if __name__ == "__main__":
     print("Broadcasting position deltas every 0.5 seconds")
     
     # Start the continuous telemetry system
-    from src.continuous_telemetry import start_continuous_telemetry
+    from src.telemetary import start_continuous_telemetry
     start_continuous_telemetry()
     
     uvicorn.run(app, host="0.0.0.0", port=8000) 
